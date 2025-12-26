@@ -85,9 +85,39 @@ farm_exp_c_noexp3 <- subset(farm_exp_c_nocontr, Exp_gr %in% c("exp1", "farmer"))
 str(farm_exp_c_noexp3)
 nrow(farm_exp_c_noexp3)
 
-# export to a new csv. From thi file I will select parcels (all plots) that have data for 2023 exp1 and farmer and 2024 exp1 and farmer. Parcels without at least one of four datas will be deleted
-write.csv2(farm_exp_c_noexp3, "farm_exp_c_noexp3.csv", row.names = FALSE)
+# omit parcels not usable in farmer-expert comparison -  aftermath (exclude parcels assessed in aftermath)
 
+# keep only needed rows
+farm_exp_c_vegcond <- subset(farm_exp_c_noexp3, Ul_aftmh %in% c("no"))
+str(farm_exp_c_vegcond)
+nrow(farm_exp_c_vegcond)
+
+# export to a new csv. From this file I will select parcels (all plots) that have data for 2023 exp1 and farmer and 2024 exp1 and farmer. Parcels without at least one of four datas will be deleted
+write.csv2(farm_exp_c_vegcond, "farm_exp_c_vegcond.csv", row.names = FALSE)
+
+
+# Step 1: Count distinct Year + Exp_gr combinations for each parcel (Polig_nr)
+combo_counts <- farm_exp_c_vegcond %>%
+  distinct(Polig_nr, Year, Exp_gr) %>%
+  group_by(Polig_nr) %>%
+  summarise(combo_count = n(), .groups = "drop")
+
+# Step 3: Identify parcels that have all 4 required combinations
+valid_parcels <- combo_counts %>%
+  filter(combo_count == 4) %>%
+  pull(Polig_nr)
+
+# Step 4: Add new column 'pairs' to the full dataset (1 for matching parcels)
+farm_exp_c_vegcond$pairs <- ifelse(farm_exp_c_vegcond$Polig_nr %in% valid_parcels, 1, "")
+
+# Step 5: Save full dataset (with 'pairs' column)
+write.csv2(farm_exp_c_vegcond, "farm_exp_with_pairs.csv", row.names = FALSE)
+
+# Step 6: Save filtered dataset (only parcels with all 4 records)
+farm_exp_only_pairs <- farm_exp_c_vegcond %>% filter(pairs == 1)
+write.csv2(farm_exp_only_pairs, "farm_exp_only_pairs.csv", row.names = FALSE)
+str(farm_exp_only_pairs)
+nrow(farm_exp_only_pairs)
 
 
 
