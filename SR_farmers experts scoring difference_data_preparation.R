@@ -85,10 +85,8 @@ farm_exp_c_noexp3 <- subset(farm_exp_c_nocontr, Exp_gr %in% c("exp1", "farmer"))
 str(farm_exp_c_noexp3)
 nrow(farm_exp_c_noexp3)
 
-
-
-# export to a new csv
-write.csv(farm_exp_sub, "farm_exp_or_basic_ZP.csv", row.names = FALSE)
+# export to a new csv. From thi file I will select parcels (all plots) that have data for 2023 exp1 and farmer and 2024 exp1 and farmer. Parcels without at least one of four datas will be deleted
+write.csv2(farm_exp_c_noexp3, "farm_exp_c_noexp3.csv", row.names = FALSE)
 
 
 
