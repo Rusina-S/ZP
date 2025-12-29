@@ -119,11 +119,357 @@ write.csv2(farm_exp_only_pairs, "farm_exp_only_pairs.csv", row.names = FALSE)
 str(farm_exp_only_pairs)
 nrow(farm_exp_only_pairs)
 
+# Calculate average number of species per plot in a parcel ----
+
+farm_exp <- read.csv2 ("farm_exp_only_pairs.csv")
+str(farm_exp)
+nrow(farm_exp)
 
 
+# 2) Make sure No_sp_plot is numeric (in case it was read as character)
+farm_exp$No_sp_plot <- as.numeric(farm_exp$No_sp_plot)
+
+# 3) Calculate average species number per parcel (Uniq_no) and add to all rows
+farm_exp <- farm_exp %>%
+  group_by(Uniq_no) %>%
+  mutate(avrg_spno_plot = mean(No_sp_plot, na.rm = TRUE)) %>%
+  ungroup()
+
+# 4) Save updated file
+write.csv2(farm_exp, "farm_exp_only_pairs1.csv", row.names = FALSE)
+str(farm_exp)
+nrow(farm_exp)
+
+# 4) use only Mntpnt 1
+farm_exp_sp <- farm_exp %>%
+  filter(Mont_pnt == "1")
+
+# use only 2024
+farm_exp_24 <- farm_exp_sp %>%
+  filter(Year == "2024")
+
+write.csv2(farm_exp_24, "farm_exp_only_pairs24.csv", row.names = FALSE) #file contain only 2024 data)
+
+#compare Wilcoxon between farmer and expert in 2024 (trained already) avrg_spno_plot, Spp_scortotal and  cumul_spno to conclude about the method agreement overall ----
+ 
 
 
+# Ensure variables are numeric (often they are read as character)
+fe24 <- farm_exp_24 %>%
+  mutate(
+    avrg_spno_plot = as.numeric(avrg_spno_plot),
+    Spp_scortotal  = as.numeric(Spp_scortotal),
+    cumul_spno     = as.numeric(cumul_spno)
+  )
 
+# varaibles
+vars <- c("avrg_spno_plot", "Spp_scortotal", "cumul_spno")
+
+# Wide data: one row per Uniq_Rprog, with exp1 and farmer side-by-side
+fe24_wide <- fe24 %>%
+  filter(Exp_gr %in% c("exp1", "farmer")) %>%
+  pivot_wider(
+    id_cols   = Uniq_Rprog,
+    names_from  = Exp_gr,
+    values_from = all_of(vars),
+    names_sep   = "_"
+  )
+
+# Paired Wilcoxon signed-rank tests (exp1 vs farmer) for each variable
+wilcox_results <- map_dfr(vars, function(v) {
+  x <- fe24_wide[[paste0(v, "_exp1")]]
+  y <- fe24_wide[[paste0(v, "_farmer")]]
+  
+  test <- wilcox.test(x, y, paired = TRUE, exact = FALSE)
+  
+  tibble(
+    variable = v,
+    n_pairs = sum(complete.cases(x, y)),
+    statistic_W = unname(test$statistic),
+    p_value = test$p.value
+  )
+})
+
+wilcox_results
+
+# visulaise differences Because the Wilcoxon test is paired, the most comparable plot is:
+
+#Compute differences per pair: diff = exp1 - farmer
+
+#Plot a single boxplot of diff with a horizontal line at 0
+
+#If the median of diff is near 0 and the box straddles 0, that visually matches “no strong shift”, often consistent with non-significant p-values.
+
+library(ggplot2)
+vars <- c("avrg_spno_plot", "Spp_scortotal", "cumul_spno")
+
+diff_long <- fe24_wide %>%
+  transmute(
+    Uniq_Rprog,
+    avrg_spno_plot = avrg_spno_plot_exp1 - avrg_spno_plot_farmer,
+    Spp_scortotal  = Spp_scortotal_exp1  - Spp_scortotal_farmer,
+    cumul_spno     = cumul_spno_exp1     - cumul_spno_farmer
+  ) %>%
+  pivot_longer(-Uniq_Rprog, names_to = "variable", values_to = "diff")
+
+ggplot(diff_long, aes(x = variable, y = diff)) +
+  geom_hline(yintercept = 0, linetype = 2) +
+  geom_boxplot() +
+  labs(y = "Paired difference (exp1 - farmer)", x = NULL)
+
+
+#If you want the direction and size of change, compute the paired differences and summarize them, e.g. median difference and IQR:
+
+res_long <- fe24_wide %>%
+  transmute(
+    avrg_spno_plot = avrg_spno_plot_exp1 - avrg_spno_plot_farmer,
+    Spp_scortotal  = Spp_scortotal_exp1  - Spp_scortotal_farmer,
+    cumul_spno     = cumul_spno_exp1     - cumul_spno_farmer
+  ) %>%
+  pivot_longer(cols = everything(), names_to = "variable", values_to = "diff") %>%
+  summarise(
+    n = sum(!is.na(diff)),
+    median = median(diff, na.rm = TRUE),
+    IQR = IQR(diff, na.rm = TRUE),
+    .by = variable
+  )
+
+res_long
+
+#visualise with histograms
+
+
+diff_all <- fe24_wide %>%
+  transmute(
+    Spp_scortotal  = Spp_scortotal_farmer  - Spp_scortotal_exp1,
+    avrg_spno_plot = avrg_spno_plot_farmer - avrg_spno_plot_exp1,
+    cumul_spno     = cumul_spno_farmer     - cumul_spno_exp1
+  ) %>%
+  pivot_longer(cols = everything(), names_to = "variable", values_to = "diff") %>%
+  mutate(direction = case_when(
+    diff > 0 ~ "farmer overestimates",
+    diff < 0 ~ "farmer underestimates",
+    TRUE     ~ "equal"
+  ))
+
+# Counts + percentages per variable
+counts_perc <- diff_all %>%
+  count(variable, direction, name = "n") %>%
+  group_by(variable) %>%
+  mutate(
+    total = sum(n),
+    percent = 100 * n / total
+  ) %>%
+  ungroup() %>%
+  arrange(variable, direction)
+
+counts_perc
+
+#histogrammas
+
+vars <- c("Spp_scortotal", "avrg_spno_plot", "cumul_spno")
+
+# Build one long table of paired differences
+diff_3 <- fe24_wide %>%
+  transmute(
+    Spp_scortotal = Spp_scortotal_farmer - Spp_scortotal_exp1,
+    avrg_spno_plot = avrg_spno_plot_farmer - avrg_spno_plot_exp1,
+    cumul_spno = cumul_spno_farmer - cumul_spno_exp1
+  ) %>%
+  pivot_longer(cols = everything(), names_to = "variable", values_to = "diff") %>%
+  mutate(direction = case_when(
+    diff > 0 ~ "farmer overestimates",
+    diff < 0 ~ "farmer underestimates",
+    TRUE     ~ "equal"
+  ))
+
+# Faceted histograms: one panel per variable
+ggplot(diff_3, aes(x = diff, fill = direction)) +
+  geom_histogram(bins = 30, alpha = 0.75) +
+  geom_vline(xintercept = 0, linetype = 2) +
+  facet_wrap(~variable, scales = "free_x") +
+  labs(
+    x = "Difference (farmer - exp1)",
+    y = "Number of paired plots",
+    fill = NULL,
+    title = "Paired differences (farmer - exp1) for all variables"
+  ) +
+  theme_minimal()
+
+# Counts of over / under / equal for each variable
+counts_table <- diff_3 %>%
+  count(variable, direction) %>%
+  arrange(variable, direction)
+
+counts_table
+
+
+# histogrammas ar procentiem y asij ----
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+
+diff_proc <- fe24_wide %>%
+  transmute(
+    Spp_scortotal  = Spp_scortotal_exp1  - Spp_scortotal_farmer,
+    avrg_spno_plot = avrg_spno_plot_exp1 - avrg_spno_plot_farmer,
+    cumul_spno     = cumul_spno_exp1     - cumul_spno_farmer
+  ) %>%
+  pivot_longer(cols = everything(), names_to = "variable", values_to = "diff") %>%
+  mutate(direction = case_when(
+    diff > 0 ~ "exp1 higher (farmer underestimates)",
+    diff < 0 ~ "exp1 lower (farmer overestimates)",
+    TRUE     ~ "equal"
+  ))
+
+# Faceted histograms with percentage on y-axis
+ggplot(diff_proc, aes(x = diff, fill = direction)) +
+  geom_histogram(
+    aes(y = after_stat(count / sum(count) * 100)),
+    bins = 30,
+    alpha = 0.75
+  ) +
+  geom_vline(xintercept = 0, linetype = 2) +
+  facet_wrap(~variable, scales = "free_x") +
+  labs(
+    x = "Difference (exp1 - farmer)",
+    y = "Paired plots (%)",
+    fill = NULL,
+    title = "Paired differences (exp1 - farmer) for all variables"
+  ) +
+  theme_minimal()
+
+# Counts + percentages for each direction per variable
+counts_table <- diff_proc %>%
+  count(variable, direction, name = "n") %>%
+  group_by(variable) %>%
+  mutate(
+    total = sum(n),
+    percent = 100 * n / total
+  ) %>%
+  ungroup() %>%
+  arrange(variable, direction)
+
+counts_table
+
+# thresholds and percentage of plots meeting them
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+
+# 1) Build paired differences (exp1 - farmer)
+diff_thr <- fe24_wide %>%
+  transmute(
+    avrg_spno_plot = avrg_spno_plot_exp1 - avrg_spno_plot_farmer,
+    cumul_spno     = cumul_spno_exp1     - cumul_spno_farmer,
+    Spp_scortotal  = Spp_scortotal_exp1  - Spp_scortotal_farmer
+  )
+
+# 2) Define thresholds you want for each variable
+thresholds <- tibble::tribble(
+  ~variable,        ~threshold,
+  "avrg_spno_plot", 1,
+  "avrg_spno_plot", 3,
+  "avrg_spno_plot", 5,
+  "cumul_spno",     1,
+  "cumul_spno",     3,
+  "cumul_spno",     5,
+  "Spp_scortotal",  5
+)
+
+# 3) Compute % of plots within each absolute-difference threshold
+within_tbl <- diff_thr %>%
+  pivot_longer(cols = everything(), names_to = "variable", values_to = "diff") %>%
+  inner_join(thresholds, by = "variable") %>%
+  summarise(
+    n_total = sum(!is.na(diff)),
+    n_within = sum(abs(diff) <= threshold, na.rm = TRUE),
+    percent_within = 100 * n_within / n_total,
+    .by = c(variable, threshold)
+  ) %>%
+  mutate(
+    band = paste0("±", threshold),
+    band = factor(band, levels = c("±1", "±3", "±5"))
+  ) %>%
+  arrange(variable, threshold)
+
+within_tbl
+# View(within_tbl)  # if using RStudio
+
+# 4) Visualise: bar chart of % within threshold (faceted by variable)
+ggplot(within_tbl, aes(x = band, y = percent_within)) +
+  geom_col(width = 0.7) +
+  facet_wrap(~variable, scales = "free_x") +
+  labs(
+    x = "Absolute difference band",
+    y = "Paired plots within band (%)",
+    title = "Percent of plots within absolute difference thresholds (exp1 - farmer)"
+  ) +
+  theme_minimal()
+
+
+#threshold - more options ----
+
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+
+# 1) Paired differences (exp1 - farmer)
+diff_thrmore <- fe24_wide %>%
+  transmute(
+    avrg_spno_plot = avrg_spno_plot_exp1 - avrg_spno_plot_farmer,
+    cumul_spno     = cumul_spno_exp1     - cumul_spno_farmer,
+    Spp_scortotal  = Spp_scortotal_exp1  - Spp_scortotal_farmer
+  )
+
+# 2) Thresholds to evaluate
+thresholds <- tibble::tribble(
+  ~variable,        ~threshold,
+  "avrg_spno_plot", 1,
+  "avrg_spno_plot", 3,
+  "avrg_spno_plot", 5,
+  
+  "cumul_spno",     1,
+  "cumul_spno",     3,
+  "cumul_spno",     5,
+  "cumul_spno",     6,
+  "cumul_spno",     7,
+  "cumul_spno",     8,
+  
+  "Spp_scortotal",  5,
+  "Spp_scortotal",  7,
+  "Spp_scortotal", 10,
+  "Spp_scortotal", 15
+)
+
+# 3) % of plots within each absolute-difference threshold
+within_tbl <- diff_thrmore %>%
+  pivot_longer(cols = everything(), names_to = "variable", values_to = "diff") %>%
+  inner_join(thresholds, by = "variable") %>%
+  summarise(
+    n_total = sum(!is.na(diff)),
+    n_within = sum(abs(diff) <= threshold, na.rm = TRUE),
+    percent_within = 100 * n_within / n_total,
+    .by = c(variable, threshold)
+  ) %>%
+  mutate(
+    band = paste0("±", threshold)
+  ) %>%
+  arrange(variable, threshold)
+
+within_tbl
+# View(within_tbl)  # if using RStudio
+
+# 4) Visualise: bars of % within threshold, faceted by variable
+ggplot(within_tbl, aes(x = factor(band, levels = unique(band)), y = percent_within)) +
+  geom_col(width = 0.7) +
+  facet_wrap(~variable, scales = "free_x") +
+  labs(
+    x = "Absolute difference band",
+    y = "Paired plots within band (%)",
+    title = "Percent of plots within absolute difference thresholds (exp1 - farmer)"
+  ) +
+  theme_minimal()
 
 
 
@@ -133,39 +479,9 @@ nrow(farm_exp_only_pairs)
 #shapiro
 #wilcoxon
 
-unique_values <- unique(scoring_data$Rel_type)
-print(unique_values)
-#unse only basic_ZP
-
-scoring_data <- scoring_data %>%
-  filter(Rel_type %in% c("basic_ZP", "farmer_ZP"))
-
-
-#use only vegetation condition normal, check difference in dataset size afzerwards
-
-unique_values <- unique(scoring_data$Veg_cond_sampling)
-print(unique_values)
 
 
 
-
-#use only basic_ZP
-scoring_data <- scoring_data %>%
-  filter(Veg_cond_sampling == "normal")
-#8750 rows to 7160 rows
-
-unique_values <- unique(scoring_data$Eksp_group)
-print(unique_values)
-#use only those who are farmer and Rusina as well as Medne and set last ones (Rusina and Medne) to exp1
-
-scoring_data <- scoring_data %>%
-  filter(Eksp_group %in% c("farmer", "Rusina", "Medne"))
-
-scoring_data <- scoring_data %>%
-  mutate(Eksp_group = ifelse(Eksp_group %in% c("Rusina", "Medne"), "exp1", Eksp_group))
-
-# Kontrolle:
-table(scoring_data$Eksp_group)
 
 #use only 1st mont pnt
 scoring_data <- scoring_data %>%
